@@ -1,0 +1,41 @@
+name: wiki_ingestor
+description: 将字幕内容Ingest到LLM Wiki，更新相关Markdown文件
+version: 1.0.0
+author: workflow
+type: ingestion
+
+parameters:
+  auto_update_refs:
+    type: boolean
+    default: true
+    description: 是否自动更新相关引用
+  generate_summary:
+    type: boolean
+    default: true
+    description: 是否生成内容摘要
+  extract_keywords:
+    type: boolean
+    default: true
+    description: 是否提取关键词
+
+input:
+  - name: subtitle_content
+    type: string
+    required: true
+    description: 校正后的字幕内容（Markdown格式）
+  - name: video_info
+    type: object
+    required: true
+    description: 视频信息字典
+  - name: github_url
+    type: string
+    required: true
+    description: GitHub上的字幕文件URL
+
+output:
+  - name: updated_files
+    type: array
+    description: 更新的文件列表
+  - name: summary
+    type: string
+    description: 处理摘要

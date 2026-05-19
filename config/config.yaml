@@ -1,0 +1,125 @@
+# 小红书视频转LLM Wiki 工作流配置
+
+# 路径配置
+paths:
+  temp_dir: "./storage/temp"
+  output_dir: "./storage/output"
+
+# 下载配置
+download:
+  quality: "best"
+  format: "mp4"
+  timeout: 300  # 下载超时时间（秒）
+
+# 音频配置
+audio:
+  format: "mp3"
+  sample_rate: 16000
+  bitrate: "32k"
+
+# 字幕转录配置
+transcription:
+  model: "base"  # whisper模型: tiny, base, small, medium, large-v1, large-v2, large-v3
+  language: "zh"
+  device: "cpu"  # cpu 或 cuda
+  compute_type: "int8"  # int8, float16, float32
+
+# LLM校正配置
+correction:
+  # 校正模式: "EXTERNAL" 使用OpenAI API调用外部LLM | "INTERNAL" 使用SOLO内置LLM能力
+  mode: "INTERNAL"
+  # 以下配置仅在 mode: "EXTERNAL" 时生效
+  model: "gpt-4o"  # 或其他可用模型
+  temperature: 0.3
+  max_tokens: 4000
+  prompt_template: |
+    你是一位专业的字幕编辑和文案优化专家。请对以下从视频中提取的字幕进行校正和优化：
+
+    原始字幕：
+    {subtitle_text}
+
+    请完成以下任务：
+    1. 修正语音识别错误（同音字、专有名词等）
+    2. 将口语化表达转为流畅的书面语
+    3. 优化标点符号使用
+    4. 重组段落结构，使其更易阅读
+    5. 保留关键的时间戳信息
+
+    输出格式要求：
+    - 使用Markdown格式
+    - 保留重要时间戳（格式：[MM:SS]）
+    - 添加适当的标题层级
+    - 关键概念用**粗体**标注
+
+    请直接输出校正后的内容：
+
+# GitHub配置 (步骤5使用)
+github:
+  repo_owner: "ryankklam"  # 你的GitHub用户名
+  repo_name: "llm-wiki-storage"   # 你的Wiki仓库名
+  branch: "test"
+  content_path: "raw/rednote/subtitle"  # 字幕文件存放路径
+  commit_message_template: "Add subtitle: {title}"
+
+# Ingestion配置
+ingestion:
+  # 模式:
+  #   PROGRAMMATIC  - Python程序自动提取关键词、分类、更新索引（快速粗处理）
+  #   SKILL_GUIDED  - LLM按SKILL.md规范执行ingest（深度理解、语义关联）[默认]
+  mode: "SKILL_GUIDED"
+  
+  # SKILL_GUIDED模式配置
+  skill_guided:
+    # 远程仓库配置（clone后由LLM在仓库内操作）
+    remote_repo:
+      enabled: true
+      github_owner: "ryankklam"
+      github_repo: "llm-wiki-storage"
+      branch: "test"
+      # GitHub Token 从环境变量 GITHUB_TOKEN 读取
+    
+    # 本地 wiki 根目录路径（remote_repo.enabled=false 时使用）
+    wiki_root: "~/llm-wiki"
+    
+    # 视频保存子目录
+    video_subdir: "raw/rednote/video"
+    
+    # 字幕保存子目录
+    subtitle_subdir: "raw/rednote/subtitle"
+    
+    # SKILL.md 路径（用于LLM参考）
+    skill_md_path: ".agents/skills/llm-wiki/SKILL.md"
+  
+  # PROGRAMMATIC模式配置（快速粗处理）
+  programmatic:
+    # 远程仓库配置
+    remote_repo:
+      enabled: true
+      github_owner: "ryankklam"
+      github_repo: "llm-wiki-storage"
+      branch: "test"
+    
+    wiki_root: "~/llm-wiki"
+    video_subdir: "raw/rednote/video"
+    subtitle_subdir: "raw/rednote/subtitle"
+    sources_subdir: "wiki/sources"
+    create_entities: true
+    create_concepts: true
+    update_overview: true
+    append_log: true
+
+# Wiki配置 (BUILTIN模式使用)
+wiki:
+  index_file: "index.md"
+  auto_update_refs: true
+  categories:
+    - "技术"
+    - "生活"
+    - "学习"
+    - "其他"
+
+# 日志配置
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "./storage/workflow.log"

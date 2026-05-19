@@ -1,0 +1,86 @@
+name: subtitle_corrector
+description: 使用LLM对视频字幕进行校正和优化
+version: 1.0.0
+author: workflow
+type: correction
+
+parameters:
+  model:
+    type: string
+    default: gpt-4o
+    description: 使用的LLM模型
+  temperature:
+    type: number
+    default: 0.3
+    description: 模型温度参数
+  max_tokens:
+    type: integer
+    default: 4000
+    description: 最大生成token数
+  
+input:
+  - name: subtitle_text
+    type: string
+    required: true
+    description: 原始字幕文本
+  - name: video_title
+    type: string
+    required: false
+    description: 视频标题（用于上下文理解）
+  - name: video_description
+    type: string
+    required: false
+    description: 视频描述（用于上下文理解）
+
+output:
+  - name: corrected_text
+    type: string
+    description: 校正后的Markdown格式文本
+  - name: changes_summary
+    type: string
+    description: 修改摘要
+
+prompt_template: |
+  你是一位专业的字幕编辑、文案优化专家和知识整理师。请对以下从视频中提取的字幕进行深度校正和优化。
+
+  视频标题：{video_title}
+  视频描述：{video_description}
+
+  原始字幕内容：
+  ```
+  {subtitle_text}
+  ```
+
+  请完成以下校正任务：
+
+  1. **语音识别错误修正**
+     - 修正同音字错误（如：在/再、的/得/地等）
+     - 修正专有名词（人名、地名、品牌名、技术术语等）
+     - 修正数字和单位的表达
+
+  2. **口语化转为书面语**
+     - 去除冗余的口头禅（"呃"、"啊"、"那个"等）
+     - 将不完整的句子补充完整
+     - 优化重复和啰嗦的表达
+
+  3. **内容结构优化**
+     - 根据话题转换划分段落
+     - 添加适当的小标题
+     - 使用列表和强调标记突出重点
+
+  4. **标点符号规范化**
+     - 正确使用中文标点
+     - 适当断句，提高可读性
+
+  5. **知识提取与标注**
+     - 识别并**加粗**关键概念和术语
+     - 识别并`标记`技术名词和代码
+     - 在适当位置添加简要解释
+
+  输出格式要求：
+  - 使用标准Markdown格式
+  - 保留重要时间戳（格式：[MM:SS]）
+  - 添加内容摘要段落
+  - 使用层级标题组织内容
+
+  请直接输出校正后的完整内容，不需要解释修改过程：
