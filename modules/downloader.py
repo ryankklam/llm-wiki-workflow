@@ -1,11 +1,12 @@
 """
-视频下载模块 - 使用yt-dlp下载小红书视频
+视频下载模块 - 使用yt-dlp下载视频（支持小红书、抖音等平台）
 """
 
 import os
 import re
 import json
 import logging
+import requests
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 from urllib.parse import urlparse
@@ -84,6 +85,10 @@ class VideoDownloader:
         """
         logger.info(f"正在提取视频信息: {url}")
         
+        # 抖音链接使用专用提取方法
+        if self.is_douyin_url(url):
+            return self._extract_douyin_info(url)
+        
         ydl_opts = {
             'quiet': True,
             'no_warnings': True,
@@ -130,6 +135,10 @@ class VideoDownloader:
             (下载文件路径, 视频信息字典)
         """
         logger.info(f"开始下载视频: {url}")
+        
+        # 抖音链接使用专用下载方法
+        if self.is_douyin_url(url):
+            return self._download_douyin(url, custom_filename)
         
         # 首先提取视频信息
         video_info = self.extract_video_info(url)
@@ -187,6 +196,176 @@ class VideoDownloader:
         
         url_lower = url.lower()
         return any(re.search(pattern, url_lower) for pattern in xiaohongshu_patterns)
+    
+    def is_douyin_url(self, url: str) -> bool:
+        """
+        检查是否为抖音链接
+        
+        Args:
+            url: 待检查的URL
+            
+        Returns:
+            是否为抖音链接
+        """
+        douyin_patterns = [
+            r'douyin\.com',
+            r'v\.douyin\.com',
+            r'iesdouyin\.com',
+        ]
+        
+        url_lower = url.lower()
+        return any(re.search(pattern, url_lower) for pattern in douyin_patterns)
+    
+    def detect_platform(self, url: str) -> str:
+        """
+        检测视频链接的平台
+        
+        Args:
+            url: 视频链接
+            
+        Returns:
+            平台名称: 'xiaohongshu', 'douyin', 'unknown'
+        """
+        if self.is_xiaohongshu_url(url):
+            return 'xiaohongshu'
+        elif self.is_douyin_url(url):
+            return 'douyin'
+        return 'unknown'
+    
+    def _extract_douyin_info(self, url: str) -> Dict:
+        """
+        抖音视频信息提取（不依赖yt-dlp）
+        
+        Args:
+            url: 抖音视频链接
+            
+        Returns:
+            视频信息字典
+        """
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+            'Referer': 'https://www.douyin.com/',
+        }
+        
+        try:
+            resp = requests.get(url, headers=headers, allow_redirects=True, timeout=15)
+            resp.raise_for_status()
+        except Exception as e:
+            raise DownloadError(f"无法访问抖音链接: {e}")
+        
+        # 提取视频ID
+        video_id = 'unknown'
+        id_match = re.search(r'/video/(\d+)', resp.url)
+        if id_match:
+            video_id = id_match.group(1)
+        
+        # 提取标题
+        title = 'Unknown'
+        title_match = re.search(r'<title>([^<]+)</title>', resp.text)
+        if title_match:
+            title = title_match.group(1).split(' - ')[0].strip()
+            title = re.sub(r'\s*#[^\s]+', '', title).strip()
+        
+        # 提取作者
+        author = 'Unknown'
+        author_match = re.search(r'"nickname":"([^"]+)"', resp.text)
+        if author_match:
+            author = author_match.group(1)
+        
+        # 提取描述
+        desc_match = re.search(r'"desc":"([^"]*)"', resp.text)
+        description = desc_match.group(1).replace('\\n', '\n') if desc_match else ''
+        
+        video_info = {
+            'id': video_id,
+            'title': title,
+            'description': description,
+            'uploader': author,
+            'uploader_id': '',
+            'duration': 0,
+            'view_count': 0,
+            'like_count': 0,
+            'upload_date': '',
+            'original_url': url,
+            'webpage_url': resp.url,
+            'thumbnail': '',
+            'formats': 0,
+            'platform': 'douyin',
+        }
+        
+        logger.info(f"抖音视频信息提取成功: {title} (by {author})")
+        return video_info
+    
+    def _download_douyin(self, url: str, custom_filename: Optional[str] = None) -> Tuple[str, Dict]:
+        """
+        抖音视频下载（不依赖yt-dlp，直接通过requests获取）
+        
+        Args:
+            url: 抖音视频链接
+            custom_filename: 自定义文件名
+            
+        Returns:
+            (下载文件路径, 视频信息字典)
+        """
+        logger.info(f"[抖音] 开始下载: {url}")
+        
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+            'Referer': 'https://www.douyin.com/',
+        }
+        
+        try:
+            resp = requests.get(url, headers=headers, allow_redirects=True, timeout=15)
+            resp.raise_for_status()
+        except Exception as e:
+            raise DownloadError(f"无法访问抖音链接: {e}")
+        
+        # 提取视频URL
+        video_url = None
+        patterns = [
+            r'"videoUrl":"([^"]+)"',
+            r'"playApi":"([^"]+)"',
+            r'"play_addr":\{[^}]*"url_list":\["([^"]+)"',
+        ]
+        for p in patterns:
+            match = re.search(p, resp.text)
+            if match:
+                video_url = match.group(1).replace('\\u002F', '/').replace('\\u0026', '&')
+                break
+        
+        if not video_url:
+            raise DownloadError("无法从抖音页面提取视频URL，可能需要登录或链接已失效")
+        
+        # 提取视频信息
+        video_info = self._extract_douyin_info(url)
+        
+        # 确定文件名
+        if custom_filename:
+            base_name = sanitize_filename(custom_filename)
+        else:
+            base_name = sanitize_filename(video_info['title'])
+            base_name = f"{base_name}_{video_info['id'][:12]}"
+        
+        output_path = self.temp_dir / f"{base_name}.mp4"
+        
+        # 下载视频
+        logger.info(f"[抖音] 正在下载视频...")
+        video_resp = requests.get(video_url, headers=headers, stream=True, timeout=120)
+        video_resp.raise_for_status()
+        
+        total = int(video_resp.headers.get('content-length', 0))
+        downloaded = 0
+        
+        with open(output_path, 'wb') as f:
+            for chunk in video_resp.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+                    downloaded += len(chunk)
+        
+        file_size_mb = downloaded / 1024 / 1024
+        logger.info(f"[抖音] 视频下载成功: {output_path} ({file_size_mb:.2f} MB)")
+        
+        return str(output_path), video_info
     
     def cleanup_temp_files(self, video_path: str = None, keep_video: bool = False):
         """
