@@ -17,6 +17,7 @@ Skill-Guided Ingestor - 准备数据后由LLM按SKILL.md执行ingest
 
 import os
 import re
+import time
 import logging
 import shutil
 from pathlib import Path
@@ -98,6 +99,9 @@ class SkillGuidedIngestor:
         """
         result = SkillGuidedResult(success=False, wiki_root=str(self.wiki_root))
         
+        # 记录 prepare 时间戳，用于后续完整性校验
+        self._prepare_timestamp = time.time()
+        
         try:
             # 1. Clone远程仓库（如果启用）
             if self.use_remote_repo and self.repo_manager:
@@ -153,6 +157,12 @@ class SkillGuidedIngestor:
         """
         步骤C：提交并推送更改（LLM完成ingest后调用）
         
+        提交前会自动校验以下文件是否已更新：
+        - wiki/index.md
+        - wiki/overview.md
+        - wiki/log.md
+        如果检测到遗漏，会打印警告但不阻止提交。
+        
         Args:
             message: Commit消息
             
@@ -163,6 +173,9 @@ class SkillGuidedIngestor:
             logger.info("[提交] 远程仓库未启用，跳过commit & push")
             return False
         
+        # ---- Ingest 完整性预检 ----
+        self._validate_ingest_completeness()
+        
         logger.info(f"[提交] 正在 commit & push...")
         success = self.repo_manager.commit_and_push(message)
         
@@ -172,6 +185,39 @@ class SkillGuidedIngestor:
             logger.warning(f"[提交] 推送失败")
         
         return success
+    
+    def _validate_ingest_completeness(self):
+        """
+        校验 ingest 流程的完整性
+        
+        检查 wiki/index.md、wiki/overview.md、wiki/log.md 是否在本次 ingest 中被更新。
+        通过对比文件的修改时间与 prepare() 的调用时间来判断。
+        """
+        import time
+        
+        required_files = {
+            'wiki/index.md': '内容目录',
+            'wiki/overview.md': '整体概览',
+            'wiki/log.md': '操作日志',
+        }
+        
+        warnings = []
+        for rel_path, desc in required_files.items():
+            file_path = self.wiki_root / rel_path
+            if not file_path.exists():
+                warnings.append(f"  ⚠️ {rel_path} ({desc}) 不存在")
+            elif hasattr(self, '_prepare_timestamp'):
+                mtime = file_path.stat().st_mtime
+                if mtime < self._prepare_timestamp:
+                    warnings.append(f"  ⚠️ {rel_path} ({desc}) 未更新 (修改时间早于 prepare)")
+        
+        if warnings:
+            logger.warning("[完整性检查] 以下索引文件可能未更新：")
+            for w in warnings:
+                logger.warning(w)
+            logger.warning("[完整性检查] 请确认是否已更新 index.md、overview.md、log.md")
+        else:
+            logger.info("[完整性检查] ✅ index.md、overview.md、log.md 均已更新")
     
     def read_wiki_file(self, relative_path: str) -> Optional[str]:
         """
