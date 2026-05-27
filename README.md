@@ -16,8 +16,18 @@ bash init.sh
 ## 工作流程
 
 ```
-视频链接 → 下载视频 → 提取音频 → Whisper转录 → LLM校正 → clone仓库 → 保存文件 → SKILL.md ingest → commit & push
+视频链接 → 去重检查 → 下载视频 → 提取音频 → Whisper转录 → LLM校正 → clone仓库 → 保存文件 → SKILL.md ingest → commit & push
 ```
+
+### 去重检查
+
+每次处理链接前会自动检查该视频是否已处理过：
+
+- 检查 `raw/{platform}/subtitle/` 是否存在包含视频ID的字幕文件
+- 检查 `raw/{platform}/video/` 是否存在视频文件
+- 检查 `wiki/sources/` 是否存在相关页面
+
+**如果检测到重复**：会提示用户并显示已存在的文件列表，避免重复处理。
 
 ### 支持平台
 

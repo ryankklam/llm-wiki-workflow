@@ -232,6 +232,125 @@ class VideoDownloader:
             return 'douyin'
         return 'unknown'
     
+    def extract_video_id(self, url: str) -> Optional[str]:
+        """
+        从URL中提取视频ID
+        
+        Args:
+            url: 视频链接
+            
+        Returns:
+            视频ID，如果无法提取则返回None
+        """
+        # 小红书链接
+        if self.is_xiaohongshu_url(url):
+            # xhslink短链格式: http://xhslink.com/o/XXXXXX
+            match = re.search(r'xhslink\.com/o/([a-zA-Z0-9]+)', url)
+            if match:
+                return match.group(1)
+            # 长链格式: xiaohongshu.com/discovery/item/XXXXXX
+            match = re.search(r'xiaohongshu\.com/.*?/([a-zA-Z0-9]+)', url)
+            if match:
+                return match.group(1)
+        
+        # 抖音链接
+        if self.is_douyin_url(url):
+            # 短链格式: v.douyin.com/XXXXXX
+            match = re.search(r'v\.douyin\.com/([a-zA-Z0-9]+)/?', url)
+            if match:
+                return match.group(1)
+            # 长链格式: douyin.com/video/XXXXXX
+            match = re.search(r'douyin\.com/video/(\d+)', url)
+            if match:
+                return match.group(1)
+        
+        return None
+    
+    def check_duplicate(self, url: str, wiki_root: Path = None) -> Dict:
+        """
+        检查视频链接是否已经处理过
+        
+        Args:
+            url: 视频链接
+            wiki_root: Wiki仓库根目录，如果为None则使用默认路径
+            
+        Returns:
+            {
+                'is_duplicate': bool,  # 是否重复
+                'video_id': str,       # 视频ID
+                'platform': str,       # 平台
+                'existing_files': [],  # 已存在的文件列表
+                'message': str         # 提示信息
+            }
+        """
+        result = {
+            'is_duplicate': False,
+            'video_id': None,
+            'platform': 'unknown',
+            'existing_files': [],
+            'message': ''
+        }
+        
+        # 检测平台
+        platform = self.detect_platform(url)
+        result['platform'] = platform
+        
+        # 提取视频ID
+        video_id = self.extract_video_id(url)
+        result['video_id'] = video_id
+        
+        if not video_id:
+            result['message'] = f"无法从链接提取视频ID，跳过去重检查"
+            return result
+        
+        # 确定检查目录
+        if wiki_root is None:
+            wiki_root = Path('/data/user/work/repos/llm-wiki-storage')
+        
+        if not wiki_root.exists():
+            result['message'] = f"Wiki仓库不存在: {wiki_root}，跳过去重检查"
+            return result
+        
+        # 平台目录映射
+        platform_dir_map = {
+            'xiaohongshu': 'rednote',
+            'douyin': 'douyin',
+        }
+        platform_dir = platform_dir_map.get(platform, platform)
+        
+        # 检查字幕文件是否存在
+        subtitle_dir = wiki_root / 'raw' / platform_dir / 'subtitle'
+        video_dir = wiki_root / 'raw' / platform_dir / 'video'
+        
+        existing_files = []
+        
+        # 检查字幕文件（包含视频ID的.md文件）
+        if subtitle_dir.exists():
+            for f in subtitle_dir.glob(f'*{video_id}*.md'):
+                existing_files.append(str(f.relative_to(wiki_root)))
+        
+        # 检查视频文件
+        if video_dir.exists():
+            for f in video_dir.glob(f'*{video_id}*.mp4'):
+                existing_files.append(str(f.relative_to(wiki_root)))
+        
+        # 检查source页面
+        sources_dir = wiki_root / 'wiki' / 'sources'
+        if sources_dir.exists():
+            for f in sources_dir.glob('*.md'):
+                content = f.read_text(encoding='utf-8')
+                if video_id in content:
+                    existing_files.append(str(f.relative_to(wiki_root)))
+        
+        if existing_files:
+            result['is_duplicate'] = True
+            result['existing_files'] = existing_files
+            result['message'] = f"⚠️ 该视频已处理过！视频ID: {video_id}，已存在 {len(existing_files)} 个文件"
+        else:
+            result['message'] = f"✅ 新视频，视频ID: {video_id}"
+        
+        return result
+    
     def _extract_douyin_info(self, url: str) -> Dict:
         """
         抖音视频信息提取（不依赖yt-dlp）
