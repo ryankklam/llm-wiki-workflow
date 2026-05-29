@@ -7,14 +7,17 @@ Skill-Guided Ingestor - 准备数据后由LLM按SKILL.md执行ingest
 
 工作流程：
 1. Clone远程仓库（或使用本地目录）
-2. 保存视频到 raw/rednote/video/
-3. 保存校正后的字幕到 raw/rednote/subtitle/
+2. 根据平台保存视频到 raw/{platform}/video/
+3. 根据平台保存校正后的字幕到 raw/{platform}/subtitle/
 4. 返回准备好的数据，交由LLM执行SKILL.md的ingest流程
 5. LLM完成后，调用commit_and_push提交更改
+
+支持平台：小红书(xiaohongshu)、抖音(douyin)
 """
 
 import os
 import re
+import time
 import logging
 import shutil
 from pathlib import Path
@@ -96,6 +99,9 @@ class SkillGuidedIngestor:
         """
         result = SkillGuidedResult(success=False, wiki_root=str(self.wiki_root))
         
+        # 记录 prepare 时间戳，用于后续完整性校验
+        self._prepare_timestamp = time.time()
+        
         try:
             # 1. Clone远程仓库（如果启用）
             if self.use_remote_repo and self.repo_manager:
@@ -104,30 +110,36 @@ class SkillGuidedIngestor:
                 self.wiki_root = local_repo_path
                 result.wiki_root = str(local_repo_path)
             
-            # 2. 生成文件名
-            rednote_id = self._extract_rednote_id(video_info.get('original_url', ''))
+            # 2. 检测平台并选择目录
+            platform = self._detect_platform(video_info.get('original_url', ''))
+            video_subdir = f"raw/{platform}/video"
+            subtitle_subdir = f"raw/{platform}/subtitle"
+            logger.info(f"[准备] 检测到平台: {platform}")
+            
+            # 3. 生成文件名
+            short_id = self._extract_short_id(video_info.get('original_url', ''), platform)
             date_str = datetime.now().strftime('%Y-%m-%d')
             safe_title = self._sanitize_filename(video_info.get('title', 'unknown'))[:40]
-            base_filename = f"{date_str}-{safe_title}_{rednote_id}"
+            base_filename = f"{date_str}-{safe_title}_{short_id}"
             
-            # 3. 确保目录结构
-            (self.wiki_root / self.video_subdir).mkdir(parents=True, exist_ok=True)
-            (self.wiki_root / self.subtitle_subdir).mkdir(parents=True, exist_ok=True)
+            # 4. 确保目录结构
+            (self.wiki_root / video_subdir).mkdir(parents=True, exist_ok=True)
+            (self.wiki_root / subtitle_subdir).mkdir(parents=True, exist_ok=True)
             
-            # 4. 保存视频
+            # 5. 保存视频
             video_filename = f"{base_filename}.mp4"
-            video_target = self.wiki_root / self.video_subdir / video_filename
+            video_target = self.wiki_root / video_subdir / video_filename
             shutil.copy2(video_path, video_target)
             result.video_path = str(video_target)
-            logger.info(f"[准备] 视频已保存: {self.video_subdir}/{video_filename}")
+            logger.info(f"[准备] 视频已保存: {video_subdir}/{video_filename}")
             
-            # 5. 保存字幕
+            # 6. 保存字幕
             subtitle_filename = f"{base_filename}.md"
-            subtitle_target = self.wiki_root / self.subtitle_subdir / subtitle_filename
+            subtitle_target = self.wiki_root / subtitle_subdir / subtitle_filename
             with open(subtitle_target, 'w', encoding='utf-8') as f:
                 f.write(corrected_content)
             result.subtitle_path = str(subtitle_target)
-            logger.info(f"[准备] 字幕已保存: {self.subtitle_subdir}/{subtitle_filename}")
+            logger.info(f"[准备] 字幕已保存: {subtitle_subdir}/{subtitle_filename}")
             
             result.corrected_content = corrected_content
             result.video_info = video_info
@@ -145,6 +157,12 @@ class SkillGuidedIngestor:
         """
         步骤C：提交并推送更改（LLM完成ingest后调用）
         
+        提交前会自动校验以下文件是否已更新：
+        - wiki/index.md
+        - wiki/overview.md
+        - wiki/log.md
+        如果检测到遗漏，会打印警告但不阻止提交。
+        
         Args:
             message: Commit消息
             
@@ -155,6 +173,9 @@ class SkillGuidedIngestor:
             logger.info("[提交] 远程仓库未启用，跳过commit & push")
             return False
         
+        # ---- Ingest 完整性预检 ----
+        self._validate_ingest_completeness()
+        
         logger.info(f"[提交] 正在 commit & push...")
         success = self.repo_manager.commit_and_push(message)
         
@@ -164,6 +185,39 @@ class SkillGuidedIngestor:
             logger.warning(f"[提交] 推送失败")
         
         return success
+    
+    def _validate_ingest_completeness(self):
+        """
+        校验 ingest 流程的完整性
+        
+        检查 wiki/index.md、wiki/overview.md、wiki/log.md 是否在本次 ingest 中被更新。
+        通过对比文件的修改时间与 prepare() 的调用时间来判断。
+        """
+        import time
+        
+        required_files = {
+            'wiki/index.md': '内容目录',
+            'wiki/overview.md': '整体概览',
+            'wiki/log.md': '操作日志',
+        }
+        
+        warnings = []
+        for rel_path, desc in required_files.items():
+            file_path = self.wiki_root / rel_path
+            if not file_path.exists():
+                warnings.append(f"  ⚠️ {rel_path} ({desc}) 不存在")
+            elif hasattr(self, '_prepare_timestamp'):
+                mtime = file_path.stat().st_mtime
+                if mtime < self._prepare_timestamp:
+                    warnings.append(f"  ⚠️ {rel_path} ({desc}) 未更新 (修改时间早于 prepare)")
+        
+        if warnings:
+            logger.warning("[完整性检查] 以下索引文件可能未更新：")
+            for w in warnings:
+                logger.warning(w)
+            logger.warning("[完整性检查] 请确认是否已更新 index.md、overview.md、log.md")
+        else:
+            logger.info("[完整性检查] ✅ index.md、overview.md、log.md 均已更新")
     
     def read_wiki_file(self, relative_path: str) -> Optional[str]:
         """
@@ -229,20 +283,67 @@ class SkillGuidedIngestor:
         }
         return context
     
-    def _extract_rednote_id(self, url: str) -> str:
-        """从小红书链接提取ID"""
+    def _detect_platform(self, url: str) -> str:
+        """
+        检测视频链接的平台
+        
+        Args:
+            url: 视频链接
+            
+        Returns:
+            平台名称: 'xiaohongshu', 'douyin', 'unknown'
+        """
         if not url:
             return 'unknown'
-        match = re.search(r'xhslink\.com/[oa]/([a-zA-Z0-9]+)', url)
-        if match:
-            return match.group(1)
-        match = re.search(r'xiaohongshu\.com/(?:explore|discovery/item)/([a-zA-Z0-9]+)', url)
-        if match:
-            return match.group(1)
+        url_lower = url.lower()
+        if any(p in url_lower for p in ['xhslink.com', 'xiaohongshu.com', 'xhs.cn']):
+            return 'xiaohongshu'
+        if any(p in url_lower for p in ['douyin.com', 'v.douyin.com', 'iesdouyin.com']):
+            return 'douyin'
+        return 'unknown'
+    
+    def _extract_short_id(self, url: str, platform: str) -> str:
+        """
+        从链接提取短ID（用于文件命名）
+        
+        Args:
+            url: 视频链接
+            platform: 平台名称
+            
+        Returns:
+            短ID字符串
+        """
+        if not url:
+            return 'unknown'
+        
+        if platform == 'xiaohongshu':
+            # 小红书：从 xhslink.com/o/xxxxx 或 xhslink.com/a/xxxxx 提取
+            match = re.search(r'xhslink\.com/[oa]/([a-zA-Z0-9]+)', url)
+            if match:
+                return match.group(1)
+            match = re.search(r'xiaohongshu\.com/(?:explore|discovery/item)/([a-zA-Z0-9]+)', url)
+            if match:
+                return match.group(1)
+        
+        elif platform == 'douyin':
+            # 抖音：从 v.douyin.com/xxxxx 提取
+            match = re.search(r'v\.douyin\.com/([a-zA-Z0-9]+)/?', url)
+            if match:
+                return match.group(1)
+            # 从 douyin.com/video/xxxxx 提取
+            match = re.search(r'douyin\.com/video/(\d+)', url)
+            if match:
+                return match.group(1)
+            # 从 modal_id=xxxxx 提取
+            match = re.search(r'modal_id=(\d+)', url)
+            if match:
+                return match.group(1)
+        
+        # 兜底：取URL最后一段有意义的部分
         parts = url.rstrip('/').split('/')
         for part in reversed(parts):
-            if part and part not in ('o', 'a'):
-                return part
+            if part and part not in ('o', 'a', 'video', 'item', 'explore', 'discovery'):
+                return part[:20]
         return 'unknown'
     
     def _sanitize_filename(self, filename: str) -> str:
