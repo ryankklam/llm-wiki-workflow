@@ -232,6 +232,79 @@ class VideoDownloader:
             return 'douyin'
         return 'unknown'
     
+    def detect_note_type(self, url: str) -> str:
+        """
+        检测小红书笔记的类型（视频 or 图文）
+        
+        通过请求页面解析 __INITIAL_STATE__ 来判断。
+        
+        Args:
+            url: 小红书笔记链接
+            
+        Returns:
+            'video' - 视频笔记
+            'normal' - 图文笔记
+            'unknown' - 无法判断
+            'error' - 请求失败
+        """
+        if not self.is_xiaohongshu_url(url):
+            return 'unknown'
+        
+        try:
+            headers = {
+                'User-Agent': (
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                    'AppleWebKit/537.36 (KHTML, like Gecko) '
+                    'Chrome/120.0.0.0 Safari/537.36'
+                ),
+                'Accept': 'text/html,application/xhtml+xml',
+                'Accept-Language': 'zh-CN,zh;q=0.9',
+                'Referer': 'https://www.xiaohongshu.com/',
+            }
+            
+            resp = requests.get(
+                url, headers=headers,
+                allow_redirects=True, timeout=15
+            )
+            resp.raise_for_status()
+            
+            # 解析 __INITIAL_STATE__
+            state_match = re.search(
+                r'window\.__INITIAL_STATE__\s*=\s*({.+?})\s*</script>',
+                resp.text, re.DOTALL
+            )
+            if not state_match:
+                logger.warning("[类型检测] 未找到 __INITIAL_STATE__")
+                return 'error'
+            
+            raw_json = re.sub(r'\bundefined\b', 'null', state_match.group(1))
+            initial_state = json.loads(raw_json)
+            
+            # 从重定向URL提取笔记ID
+            id_match = re.search(
+                r'xiaohongshu\.com/(?:explore|discovery/item)/([\da-f]+)',
+                resp.url
+            )
+            if not id_match:
+                return 'unknown'
+            
+            note_id = id_match.group(1)
+            note_data = (
+                initial_state
+                .get('note', {})
+                .get('noteDetailMap', {})
+                .get(note_id, {})
+                .get('note', {})
+            )
+            
+            note_type = note_data.get('type', 'unknown')
+            logger.info(f"[类型检测] 笔记类型: {note_type}")
+            return note_type
+            
+        except Exception as e:
+            logger.error(f"[类型检测] 失败: {e}")
+            return 'error'
+    
     def extract_video_id(self, url: str) -> Optional[str]:
         """
         从URL中提取视频ID

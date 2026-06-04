@@ -1,8 +1,8 @@
 # llm-wiki-workflow
 
-视频 → 字幕转录 → LLM校正 → GitHub Wiki Ingest
+视频/图文 → 转录提取 → LLM校正 → GitHub Wiki Ingest
 
-支持**小红书**和**抖音**视频链接，自动完成从下载到知识入库的全流程。
+支持**小红书**和**抖音**的**视频**和**图文笔记**链接，自动完成从下载到知识入库的全流程。
 
 ## 快速开始（每次新会话）
 
@@ -11,30 +11,42 @@ cd /workspace/xhs-to-llm-wiki
 bash init.sh
 ```
 
-然后直接给我视频链接即可，我会自动执行全流程。
+然后直接给我链接即可，我会自动判断类型并执行对应流程。
 
 ## 工作流程
+
+### 视频笔记
 
 ```
 视频链接 → 去重检查 → 下载视频 → 提取音频 → Whisper转录 → LLM校正 → clone仓库 → 保存文件 → SKILL.md ingest → commit & push
 ```
 
+### 图文笔记（新增 🆕）
+
+```
+图文链接 → 去重检查 → 抓取笔记信息 → 下载图片 → 生成Markdown → clone仓库 → 保存图片+MD → SKILL.md ingest → commit & push
+```
+
+系统会自动判断笔记类型：
+- **视频笔记**（`type: video`）→ 走视频流程
+- **图文笔记**（`type: normal`）→ 走图文流程
+
 ### 去重检查
 
-每次处理链接前会自动检查该视频是否已处理过：
+每次处理链接前会自动检查该笔记是否已处理过：
 
-- 检查 `raw/{platform}/subtitle/` 是否存在包含视频ID的字幕文件
-- 检查 `raw/{platform}/video/` 是否存在视频文件
+- 检查 `raw/{platform}/subtitle/` 或 `raw/{platform}/content/` 是否存在相关文件
+- 检查 `raw/{platform}/video/` 或 `raw/{platform}/images/` 是否存在媒体文件
 - 检查 `wiki/sources/` 是否存在相关页面
 
 **如果检测到重复**：会提示用户并显示已存在的文件列表，避免重复处理。
 
-### 支持平台
+## 支持平台
 
-| 平台 | 链接格式 | 下载方式 |
-|------|----------|----------|
-| 小红书 | `http://xhslink.com/o/xxx` | yt-dlp |
-| 抖音 | `https://v.douyin.com/xxx` | requests（无需cookies） |
+| 平台 | 链接格式 | 视频下载 | 图文抓取 |
+|------|----------|----------|----------|
+| 小红书 | `http://xhslink.com/o/xxx` | yt-dlp | requests + __INITIAL_STATE__ |
+| 抖音 | `https://v.douyin.com/xxx` | requests（无需cookies） | 待支持 |
 
 抖音视频自动保存到 `raw/douyin/`，小红书保存到 `raw/rednote/`。
 
@@ -62,35 +74,44 @@ xhs-to-llm-wiki/
 │   ├── .env.example                # 环境变量模板
 │   └── .env                       # 环境变量（GITHUB_TOKEN，不提交到Git）
 ├── modules/
-│   ├── downloader.py              # 视频下载（小红书=yt-dlp，抖音=requests）
+│   ├── downloader.py              # 视频下载 + 笔记类型检测
+│   ├── rednote_scraper.py         # 🆕 小红书图文笔记抓取
 │   ├── audio_extractor.py         # ffmpeg音频提取
 │   ├── transcriber.py             # Whisper字幕转录
 │   ├── github_repo_manager.py     # Git仓库管理
 │   └── utils.py                   # 工具函数
 ├── skills/
 │   ├── subtitle_corrector/        # 字幕校正（INTERNAL/EXTERNAL双模式）
-│   ├── skill_guided_ingestor.py   # SKILL_GUIDED模式（含ingest完整性预检）
+│   ├── skill_guided_ingestor.py   # SKILL_GUIDED模式（视频+图文）
 │   └── llm_wiki_adapter.py        # PROGRAMMATIC模式
 └── storage/
-    ├── temp/                      # 临时文件（视频、音频）
-    └── output/                    # 输出文件（原始/校正后字幕）
+    ├── temp/                      # 临时文件（视频、音频、图片）
+    └── output/                    # 输出文件（原始/校正后字幕、MD文档）
 ```
 
 ## 核心模块说明
 
-### downloader.py — 多平台视频下载
+### downloader.py — 多平台下载 + 类型检测
 
-- **小红书**：通过 yt-dlp 下载
-- **抖音**：通过 requests 直接获取（绕过 yt-dlp 的 cookies 限制）
+- **小红书视频**：通过 yt-dlp 下载
+- **抖音视频**：通过 requests 直接获取（绕过 yt-dlp 的 cookies 限制）
+- **笔记类型检测**：`detect_note_type(url)` → `video` / `normal` / `error`
 - 自动检测平台：`detect_platform(url)` → `xiaohongshu` / `douyin` / `unknown`
-- 自动提取视频信息：标题、作者、视频ID
+
+### rednote_scraper.py — 🆕 小红书图文笔记抓取
+
+- **fetch_note_info(url)**：获取笔记信息（标题、正文、标签、作者、图片列表）
+- **download_images()**：批量下载高清图片
+- **generate_markdown()**：生成结构化 Markdown 文档
+- **scrape(url)**：一键完成全流程（获取 → 下载 → 生成MD）
+- 通过解析 `window.__INITIAL_STATE__` JSON 获取完整数据
 
 ### skill_guided_ingestor.py — SKILL_GUIDED Ingest
 
-- **prepare()**：clone仓库 + 保存视频/字幕到 `raw/{platform}/`
+- **prepare()**：clone仓库 + 保存视频/字幕到 `raw/{platform}/`（视频流程）
+- **prepare_image_note()** 🆕：clone仓库 + 保存图片/MD到 `raw/{platform}/`（图文流程）
 - **commit_and_push()**：提交前自动校验 index/overview/log 是否已更新
 - **_validate_ingest_completeness()**：通过时间戳对比检测遗漏的索引文件更新
-- 自动根据平台分类目录：`raw/rednote/` 或 `raw/douyin/`
 
 ### 字幕校正双模式
 
@@ -106,7 +127,9 @@ llm-wiki-storage/
 ├── raw/
 │   ├── rednote/                   # 小红书原始文件
 │   │   ├── video/                 # 视频文件
-│   │   └── subtitle/              # 校正后字幕
+│   │   ├── subtitle/              # 校正后字幕
+│   │   ├── images/                # 🆕 图文笔记图片
+│   │   └── content/               # 🆕 图文笔记MD文档
 │   └── douyin/                    # 抖音原始文件
 │       ├── video/
 │       └── subtitle/
@@ -139,3 +162,4 @@ llm-wiki-storage/
 - `correction.mode: INTERNAL` 时不需要 OpenAI API Key
 - `config/.env` 中的 GITHUB_TOKEN 用于推送到 GitHub
 - 抖音视频通过移动端 UA 获取，不需要登录 cookies
+- 🆕 小红书图文笔记通过解析 `__INITIAL_STATE__` 获取数据，如遇反爬可尝试更新 User-Agent

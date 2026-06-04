@@ -87,6 +87,12 @@ ingestion:
     # 字幕保存子目录
     subtitle_subdir: "raw/rednote/subtitle"
     
+    # 图文笔记图片保存子目录
+    image_subdir: "raw/rednote/images"
+    
+    # 图文笔记内容保存子目录
+    content_subdir: "raw/rednote/content"
+    
     # SKILL.md 路径（用于LLM参考）
     skill_md_path: ".agents/skills/llm-wiki/SKILL.md"
   

@@ -153,6 +153,103 @@ class SkillGuidedIngestor:
         
         return result
     
+    def prepare_image_note(
+        self,
+        markdown_path: str,
+        image_paths: List[str],
+        note_info: Dict
+    ) -> SkillGuidedResult:
+        """
+        步骤A2：准备图文笔记数据（clone + 保存图片和MD）
+
+        Args:
+            markdown_path: 生成的Markdown文件路径
+            image_paths: 下载的图片文件路径列表
+            note_info: 笔记信息字典，包含：
+                - title: 标题
+                - author: 作者
+                - note_id: 笔记ID
+                - original_url: 原始链接
+                - note_type: 笔记类型
+
+        Returns:
+            SkillGuidedResult，包含wiki_root路径供LLM操作
+        """
+        result = SkillGuidedResult(success=False, wiki_root=str(self.wiki_root))
+
+        # 记录 prepare 时间戳
+        self._prepare_timestamp = time.time()
+
+        try:
+            # 1. Clone远程仓库
+            if self.use_remote_repo and self.repo_manager:
+                logger.info("[准备-图文] Clone远程仓库...")
+                local_repo_path = self.repo_manager.clone()
+                self.wiki_root = local_repo_path
+                result.wiki_root = str(local_repo_path)
+
+            # 2. 检测平台
+            platform = self._detect_platform(note_info.get('original_url', ''))
+            image_subdir = f"raw/{platform}/images"
+            content_subdir = f"raw/{platform}/content"
+            logger.info(f"[准备-图文] 检测到平台: {platform}")
+
+            # 3. 生成文件名
+            short_id = self._extract_short_id(note_info.get('original_url', ''), platform)
+            date_str = datetime.now().strftime('%Y-%m-%d')
+            safe_title = self._sanitize_filename(note_info.get('title', 'unknown'))[:40]
+            base_filename = f"{date_str}-{safe_title}_{short_id}"
+
+            # 4. 确保目录结构
+            (self.wiki_root / image_subdir).mkdir(parents=True, exist_ok=True)
+            (self.wiki_root / content_subdir).mkdir(parents=True, exist_ok=True)
+
+            # 5. 保存图片
+            saved_images = []
+            for i, img_path in enumerate(image_paths):
+                if os.path.exists(img_path):
+                    ext = Path(img_path).suffix
+                    img_filename = f"{base_filename}_image_{i+1:02d}{ext}"
+                    img_target = self.wiki_root / image_subdir / img_filename
+                    shutil.copy2(img_path, img_target)
+                    saved_images.append(str(img_target))
+                    logger.info(f"[准备-图文] 图片已保存: {image_subdir}/{img_filename}")
+
+            # 6. 保存Markdown内容
+            content_filename = f"{base_filename}.md"
+            content_target = self.wiki_root / content_subdir / content_filename
+
+            # 读取原始MD，替换图片路径为仓库内相对路径
+            with open(markdown_path, 'r', encoding='utf-8') as f:
+                md_content = f.read()
+
+            # 替换图片路径为 raw/{platform}/images/ 下的相对路径
+            for i, (orig_path, saved_path) in enumerate(zip(image_paths, saved_images)):
+                if os.path.exists(orig_path):
+                    rel_path = f"../images/{base_filename}_image_{i+1:02d}{Path(orig_path).suffix}"
+                    # 替换各种可能的路径引用
+                    md_content = md_content.replace(orig_path, rel_path)
+
+            with open(content_target, 'w', encoding='utf-8') as f:
+                f.write(md_content)
+
+            result.corrected_content = md_content
+            result.video_info = note_info
+            result.video_path = str(content_target)
+            result.success = True
+
+            logger.info(
+                f"[准备-图文] 数据准备完成，"
+                f"图片: {len(saved_images)}张, "
+                f"MD: {content_subdir}/{content_filename}"
+            )
+
+        except Exception as e:
+            logger.error(f"[准备-图文] 失败: {e}")
+            result.error = str(e)
+
+        return result
+    
     def commit_and_push(self, message: str) -> bool:
         """
         步骤C：提交并推送更改（LLM完成ingest后调用）
