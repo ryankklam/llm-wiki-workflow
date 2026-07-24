@@ -114,6 +114,7 @@ class VideoDownloader:
                     'webpage_url': info.get('webpage_url', url),
                     'thumbnail': info.get('thumbnail', ''),
                     'formats': len(info.get('formats', [])),
+                    'platform': self.detect_platform(url),
                 }
                 
                 logger.info(f"视频信息提取成功: {video_info['title']}")
@@ -215,6 +216,25 @@ class VideoDownloader:
         
         url_lower = url.lower()
         return any(re.search(pattern, url_lower) for pattern in douyin_patterns)
+
+    def is_bilibili_url(self, url: str) -> bool:
+        """
+        检查是否为Bilibili链接
+        
+        Args:
+            url: 待检查的URL
+            
+        Returns:
+            是否为Bilibili链接
+        """
+        bilibili_patterns = [
+            r'bilibili\.com',
+            r'b23\.tv',
+            r'bilibili\.tv',
+        ]
+        
+        url_lower = url.lower()
+        return any(re.search(pattern, url_lower) for pattern in bilibili_patterns)
     
     def detect_platform(self, url: str) -> str:
         """
@@ -224,12 +244,14 @@ class VideoDownloader:
             url: 视频链接
             
         Returns:
-            平台名称: 'xiaohongshu', 'douyin', 'unknown'
+            平台名称: 'xiaohongshu', 'douyin', 'bilibili', 'unknown'
         """
         if self.is_xiaohongshu_url(url):
             return 'xiaohongshu'
         elif self.is_douyin_url(url):
             return 'douyin'
+        elif self.is_bilibili_url(url):
+            return 'bilibili'
         return 'unknown'
     
     def detect_note_type(self, url: str) -> str:
@@ -337,6 +359,21 @@ class VideoDownloader:
             if match:
                 return match.group(1)
         
+        # Bilibili链接
+        if self.is_bilibili_url(url):
+            # BV号格式: bilibili.com/video/BVxxxx
+            match = re.search(r'/BV([a-zA-Z0-9]+)', url)
+            if match:
+                return f"BV{match.group(1)}"
+            # AV号格式: bilibili.com/video/avxxxx
+            match = re.search(r'/av(\d+)', url)
+            if match:
+                return f"av{match.group(1)}"
+            # b23.tv短链: b23.tv/XXXXX
+            match = re.search(r'b23\.tv/([a-zA-Z0-9]+)', url)
+            if match:
+                return match.group(1)
+        
         return None
     
     def check_duplicate(self, url: str, wiki_root: Path = None) -> Dict:
@@ -388,6 +425,7 @@ class VideoDownloader:
         platform_dir_map = {
             'xiaohongshu': 'rednote',
             'douyin': 'douyin',
+            'bilibili': 'bilibili',
         }
         platform_dir = platform_dir_map.get(platform, platform)
         

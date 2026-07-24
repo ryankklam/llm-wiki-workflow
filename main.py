@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """
-小红书视频转LLM Wiki 工作流主程序
+视频转LLM Wiki 工作流主程序
+支持平台: 小红书、抖音、Bilibili
 
 使用方法:
     python main.py "http://xhslink.com/o/4doVxyjRF2c"
+    python main.py "https://www.bilibili.com/video/BV1xx411c7mD"
     python main.py --batch urls.txt
     python main.py --skip-download --audio-path ./audio.mp3
 """
@@ -36,8 +38,8 @@ from skills.skill_guided_ingestor import SkillGuidedIngestor
 logger = logging.getLogger(__name__)
 
 
-class XHSToLLMWikiWorkflow:
-    """小红书视频转LLM Wiki工作流"""
+class VideoToLLMWikiWorkflow:
+    """视频转LLM Wiki工作流（支持小红书、抖音、Bilibili）"""
     
     def __init__(self, config: dict = None, internal_corrector=None):
         """
@@ -382,17 +384,18 @@ def print_result(result: dict):
 def main():
     """主函数"""
     parser = argparse.ArgumentParser(
-        description='小红书视频转LLM Wiki工作流',
+        description='视频转LLM Wiki工作流（支持小红书、抖音、Bilibili）',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
   python main.py "http://xhslink.com/o/4doVxyjRF2c"
+  python main.py "https://www.bilibili.com/video/BV1xx411c7mD"
   python main.py --batch urls.txt
   python main.py --skip-download --audio-path ./audio.mp3 "http://example.com"
         """
     )
     
-    parser.add_argument('url', nargs='?', help='小红书视频链接')
+    parser.add_argument('url', nargs='?', help='视频链接（支持小红书、抖音、Bilibili）')
     parser.add_argument('--batch', '-b', metavar='FILE', help='批量处理，从文件读取URL列表')
     parser.add_argument('--skip-download', action='store_true', help='跳过下载，使用本地文件')
     parser.add_argument('--video-path', help='本地视频文件路径（配合--skip-download使用）')
@@ -418,7 +421,7 @@ def main():
         logging.getLogger().setLevel(logging.DEBUG)
     
     # 初始化工作流
-    workflow = XHSToLLMWikiWorkflow(config)
+    workflow = VideoToLLMWikiWorkflow(config)
     
     # 处理视频
     if args.batch:

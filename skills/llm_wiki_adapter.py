@@ -113,37 +113,38 @@ class LLMWikiAdapter:
                 self.wiki_root = local_repo_path  # 更新 wiki_root 为 clone 的路径
                 result.wiki_root = str(local_repo_path)
             
-            # 从小红书链接提取ID
-            rednote_id = self._extract_rednote_id(video_info.get('original_url', ''))
-            
+            # 从链接提取ID
+            video_id = self._extract_video_id(video_info.get('original_url', ''))
+            platform = self._detect_platform(video_info.get('original_url', ''))
+
             # 生成统一文件名: {日期}-{标题}_{ID}
             date_str = datetime.now().strftime('%Y-%m-%d')
             safe_title = self._sanitize_filename(video_info.get('title', 'unknown'))[:40]
-            base_filename = f"{date_str}-{safe_title}_{rednote_id}"
-            
+            base_filename = f"{date_str}-{safe_title}_{video_id}"
+
             # 确保目录结构存在
             self._ensure_directory_structure()
-            
-            # Step 1: 保存原始视频到 raw/rednote/video/
+
+            # Step 1: 保存原始视频
             saved_video_path = self._save_video(video_path, base_filename)
             result.video_path = saved_video_path
             logger.info(f"[Step 1] 视频已保存: {saved_video_path}")
-            
-            # Step 2: 保存校正后的字幕到 raw/rednote/subtitle/
+
+            # Step 2: 保存校正后的字幕
             saved_subtitle_path = self._save_subtitle(corrected_content, base_filename, video_info)
             result.subtitle_path = saved_subtitle_path
             result.created_pages.append(saved_subtitle_path)
             logger.info(f"[Step 2] 字幕已保存: {saved_subtitle_path}")
-            
+
             # Step 3: 创建来源摘要页
             source_page_path = self._create_source_page(
-                video_info, subtitle_content, corrected_content, 
+                video_info, subtitle_content, corrected_content,
                 saved_video_path, saved_subtitle_path
             )
             result.source_page = source_page_path
             result.created_pages.append(source_page_path)
             logger.info(f"[Step 3] 来源摘要页已创建: {source_page_path}")
-            
+
             # Step 4: 提取实体和概念
             entities, concepts = self._extract_entities_and_concepts(
                 corrected_content or subtitle_content, video_info
@@ -151,42 +152,42 @@ class LLMWikiAdapter:
             result.entities = entities
             result.concepts = concepts
             logger.info(f"[Step 4] 提取实体: {entities}, 概念: {concepts}")
-            
+
             # Step 5: 创建/更新实体页和概念页
             if self.create_entities:
                 for entity in entities:
                     entity_path = self._create_or_update_entity(entity, video_info, source_page_path)
                     if entity_path:
                         result.created_pages.append(entity_path)
-                        
+
             if self.create_concepts:
                 for concept in concepts:
                     concept_path = self._create_or_update_concept(concept, video_info, source_page_path)
                     if concept_path:
                         result.created_pages.append(concept_path)
-            
+
             logger.info(f"[Step 5] 实体/概念页已更新")
-            
+
             # Step 6: 更新 index.md
             self._update_index(video_info, source_page_path, entities, concepts)
             result.updated_pages.append(str(self.wiki_root / 'wiki' / 'index.md'))
             logger.info(f"[Step 6] index.md 已更新")
-            
+
             # Step 7: 更新 overview.md
             if self.update_overview:
                 self._update_overview(len(result.created_pages))
                 result.updated_pages.append(str(self.wiki_root / 'wiki' / 'overview.md'))
                 logger.info(f"[Step 7] overview.md 已更新")
-            
+
             # Step 8: 追加 log.md
             if self.append_log:
                 self._append_log(video_info, result.created_pages, result.updated_pages)
                 result.updated_pages.append(str(self.wiki_root / 'wiki' / 'log.md'))
                 logger.info(f"[Step 8] log.md 已追加")
-            
+
             # Step 9: 远程仓库模式 - Commit & Push
             if self.use_remote_repo and self.repo_manager:
-                commit_message = f"Add: {video_info.get('title', 'new video')} [{rednote_id}]"
+                commit_message = f"Add: {video_info.get('title', 'new video')} [{video_id}]"
                 logger.info(f"[Step 9] 正在 commit & push...")
                 if self.repo_manager.commit_and_push(commit_message):
                     logger.info(f"[Step 9] 已推送到远程仓库")
@@ -205,8 +206,8 @@ class LLMWikiAdapter:
     def _ensure_directory_structure(self):
         """确保 llm-wiki 目录结构存在"""
         dirs = [
-            self.wiki_root / 'raw' / 'rednote' / 'video',
-            self.wiki_root / 'raw' / 'rednote' / 'subtitle',
+            self.wiki_root / self.video_subdir,
+            self.wiki_root / self.subtitle_subdir,
             self.wiki_root / 'wiki' / 'sources',
             self.wiki_root / 'wiki' / 'entities',
             self.wiki_root / 'wiki' / 'concepts',
@@ -216,38 +217,77 @@ class LLMWikiAdapter:
         for d in dirs:
             d.mkdir(parents=True, exist_ok=True)
             logger.debug(f"确保目录存在: {d}")
-    
-    def _extract_rednote_id(self, url: str) -> str:
+
+    def _detect_platform(self, url: str) -> str:
         """
-        从小红书链接中提取ID
-        
-        支持格式:
-        - http://xhslink.com/o/4iELqFXf4C0
-        - https://www.xiaohongshu.com/explore/xxxxx
-        - https://www.xiaohongshu.com/discovery/item/xxxxx
-        
-        Returns:
-            提取的ID字符串，如 "4iELqFXf4C0"
+        检测视频链接的平台
         """
         if not url:
             return 'unknown'
+        url_lower = url.lower()
+        if any(p in url_lower for p in ['xhslink.com', 'xiaohongshu.com', 'xhs.cn']):
+            return 'xiaohongshu'
+        if any(p in url_lower for p in ['douyin.com', 'v.douyin.com', 'iesdouyin.com']):
+            return 'douyin'
+        if any(p in url_lower for p in ['bilibili.com', 'b23.tv', 'bilibili.tv']):
+            return 'bilibili'
+        return 'unknown'
+
+    def _extract_video_id(self, url: str) -> str:
+        """
+        从链接中提取视频ID（支持多平台）
         
-        # xhslink.com/o/ID 格式
-        match = re.search(r'xhslink\.com/[oa]/([a-zA-Z0-9]+)', url)
-        if match:
-            return match.group(1)
+        支持格式:
+        - 小红书: http://xhslink.com/o/4iELqFXf4C0
+        - Bilibili: https://www.bilibili.com/video/BV1xx411c7mD
+        - Bilibili短链: https://b23.tv/xxxxx
         
-        # xiaohongshu.com/explore/ID 或 /discovery/item/ID
-        match = re.search(r'xiaohongshu\.com/(?:explore|discovery/item)/([a-zA-Z0-9]+)', url)
-        if match:
-            return match.group(1)
-        
+        Returns:
+            提取的ID字符串
+        """
+        if not url:
+            return 'unknown'
+
+        platform = self._detect_platform(url)
+
+        if platform == 'xiaohongshu':
+            # xhslink.com/o/ID 格式
+            match = re.search(r'xhslink\.com/[oa]/([a-zA-Z0-9]+)', url)
+            if match:
+                return match.group(1)
+            # xiaohongshu.com/explore/ID 或 /discovery/item/ID
+            match = re.search(r'xiaohongshu\.com/(?:explore|discovery/item)/([a-zA-Z0-9]+)', url)
+            if match:
+                return match.group(1)
+
+        elif platform == 'bilibili':
+            # BV号
+            match = re.search(r'/BV([a-zA-Z0-9]+)', url)
+            if match:
+                return f"BV{match.group(1)}"
+            # AV号
+            match = re.search(r'/av(\d+)', url)
+            if match:
+                return f"av{match.group(1)}"
+            # b23.tv短链
+            match = re.search(r'b23\.tv/([a-zA-Z0-9]+)', url)
+            if match:
+                return match.group(1)
+
+        elif platform == 'douyin':
+            match = re.search(r'v\.douyin\.com/([a-zA-Z0-9]+)/?', url)
+            if match:
+                return match.group(1)
+            match = re.search(r'douyin\.com/video/(\d+)', url)
+            if match:
+                return match.group(1)
+
         # 通用：取URL最后一段非空路径
         parts = url.rstrip('/').split('/')
         for part in reversed(parts):
-            if part and part != 'o' and part != 'a':
+            if part and part not in ('o', 'a', 'video', 'item', 'explore', 'discovery'):
                 return part
-        
+
         return 'unknown'
     
     def _save_video(self, video_path: str, base_filename: str) -> str:
@@ -320,13 +360,14 @@ class LLMWikiAdapter:
         content_summary = self._generate_summary(corrected_content or subtitle_content, 500)
         
         # 构建页面内容
+        platform = self._detect_platform(video_info.get('original_url', ''))
         page_content = f"""---
 type: source
 date: {date_str}
 source: {video_relative_path}
 subtitle: {subtitle_relative_path}
-platform: rednote
-rednote_id: {video_info.get('original_url', '')}
+platform: {platform}
+video_id: {video_info.get('id', '')}
 author: {video_info.get('uploader', 'Unknown')}
 tags: [{', '.join(key_concepts)}]
 ---

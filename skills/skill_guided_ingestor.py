@@ -388,7 +388,7 @@ class SkillGuidedIngestor:
             url: 视频链接
             
         Returns:
-            平台名称: 'xiaohongshu', 'douyin', 'unknown'
+            平台名称: 'xiaohongshu', 'douyin', 'bilibili', 'unknown'
         """
         if not url:
             return 'unknown'
@@ -397,6 +397,8 @@ class SkillGuidedIngestor:
             return 'xiaohongshu'
         if any(p in url_lower for p in ['douyin.com', 'v.douyin.com', 'iesdouyin.com']):
             return 'douyin'
+        if any(p in url_lower for p in ['bilibili.com', 'b23.tv', 'bilibili.tv']):
+            return 'bilibili'
         return 'unknown'
     
     def _extract_short_id(self, url: str, platform: str) -> str:
@@ -433,6 +435,20 @@ class SkillGuidedIngestor:
                 return match.group(1)
             # 从 modal_id=xxxxx 提取
             match = re.search(r'modal_id=(\d+)', url)
+            if match:
+                return match.group(1)
+        
+        elif platform == 'bilibili':
+            # Bilibili：从 BV号 提取
+            match = re.search(r'/BV([a-zA-Z0-9]+)', url)
+            if match:
+                return f"BV{match.group(1)}"
+            # 从 AV号 提取
+            match = re.search(r'/av(\d+)', url)
+            if match:
+                return f"av{match.group(1)}"
+            # 从 b23.tv/xxxxx 提取
+            match = re.search(r'b23\.tv/([a-zA-Z0-9]+)', url)
             if match:
                 return match.group(1)
         
